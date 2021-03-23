@@ -89,7 +89,7 @@ fn regen_mesh(
             collider_indicies.push([indices[i], indices[i + 1], indices[i + 2]]);
         }
 
-        collider_set.remove(collider_handle.handle(), &mut bodies, true);
+        collider_set.remove(collider_handle.handle(), &mut bodies, false);
         let new_handle = collider_set.insert(
             ColliderBuilder::trimesh(
                 collider_verts, 

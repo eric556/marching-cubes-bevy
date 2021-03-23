@@ -28,6 +28,12 @@ const thershold: f32 = 0.0f32;
 pub mod chunk;
 pub mod triangulation;
 
+struct ModifyLand{
+    incrementing: bool,
+    decrementing: bool,
+    change_value: f32
+}
+
 fn main() {
     App::build()
         .add_resource(Msaa { samples: 4 })
@@ -37,6 +43,11 @@ fn main() {
             title: "Marching Cubes".to_string(),
             vsync: true,
             ..Default::default()
+        })
+        .add_resource(ModifyLand {
+            incrementing: false,
+            decrementing: false,
+            change_value: 0.0
         })
         .add_plugins(DefaultPlugins)
         .add_plugin(FourXCameraPlugin)
@@ -140,12 +151,12 @@ fn setup_test_object(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.spawn(PbrBundle{
-        mesh: meshes.add(Mesh::from(shape::Icosphere{radius:0.25, ..Default::default()})),
+        mesh: meshes.add(Mesh::from(shape::Icosphere{radius:1.0, ..Default::default()})),
         material: materials.add(Color::rgb(1.0, 0.0, 0.0).into()),
         ..Default::default()
     })
     .with(RigidBodyBuilder::new_dynamic().translation(10.0, 20.0, 10.0).gravity_scale(0.5))
-    .with(ColliderBuilder::cylinder(0.25, 0.25));
+    .with(ColliderBuilder::cylinder(1.0, 1.0));
 }
 
 fn inside_sphere(sphere_pos: Vec3, radius: f32, point: Vec3) -> bool {
@@ -157,6 +168,7 @@ fn inside_sphere(sphere_pos: Vec3, radius: f32, point: Vec3) -> bool {
 
 fn select_terrain(
     pick_state: Res<PickState>,
+    mut mod_land: ResMut<ModifyLand>,
     mut corner_query: Query<(&InteractableMesh, &mut Chunk, &Transform, Entity)>,
 ) {
     for (interactable, mut chunk, transform, entity) in &mut corner_query.iter_mut() {
@@ -168,37 +180,61 @@ fn select_terrain(
             .mouse_down_event(&Group::default(), MouseButton::Right)
             .unwrap();
 
-        if increment_event.is_none() && decrement_event.is_none() {
+        match increment_event {
+            bevy_mod_picking::MouseDownEvents::None => {}
+            bevy_mod_picking::MouseDownEvents::MouseJustPressed => {
+                mod_land.incrementing = true;
+                mod_land.change_value += 0.1;
+            }
+            bevy_mod_picking::MouseDownEvents::MouseJustReleased => {
+                mod_land.incrementing = false;
+                mod_land.change_value -= 0.1;
+            }
+        }
+
+        match decrement_event {
+            bevy_mod_picking::MouseDownEvents::None => {}
+            bevy_mod_picking::MouseDownEvents::MouseJustPressed => {
+                mod_land.decrementing = true;
+                mod_land.change_value -= 0.1;
+            }
+            bevy_mod_picking::MouseDownEvents::MouseJustReleased => {
+                mod_land.decrementing = false;
+                mod_land.change_value += 0.1;
+            }
+        }
+
+        if !mod_land.incrementing && !mod_land.decrementing {
             continue;
         }
 
-        let (_, intersection) = pick_state.top(Group::default()).unwrap();
-        let sphere_center = intersection.position();
-        let chunk_position = transform.translation;
+        match pick_state.top(Group::default()) {
+            Some(top_state) => {
+                let(_, intersection) = top_state;
 
-        // Gen a sphere and capture chunk data in that sphere
-        for y in 0..HEIGHT {
-            for x in 0..WIDTH {
-                for z in 0..LENGTH {
-                    if inside_sphere(
-                        *sphere_center,
-                        3f32,
-                        Vec3::new(
-                            chunk_position.x + x as f32,
-                            chunk_position.y + y as f32,
-                            chunk_position.z + z as f32,
-                        ),
-                    ) {
-                        if !increment_event.is_none() {
-                            chunk.data[x][y][z] += 0.1;
-                        }
+                let sphere_center = intersection.position();
+                let chunk_position = transform.translation;
 
-                        if !decrement_event.is_none() {
-                            chunk.data[x][y][z] -= 0.1;
+                // Gen a sphere and capture chunk data in that sphere
+                for y in 0..HEIGHT {
+                    for x in 0..WIDTH {
+                        for z in 0..LENGTH {
+                            if inside_sphere(
+                                *sphere_center,
+                                1.0f32,
+                                Vec3::new(
+                                    chunk_position.x + x as f32,
+                                    chunk_position.y + y as f32,
+                                    chunk_position.z + z as f32,
+                                ),
+                            ) {
+                                chunk.data[x][y][z] += mod_land.change_value;
+                            }
                         }
                     }
                 }
             }
+            None => {}
         }
     }
 }
