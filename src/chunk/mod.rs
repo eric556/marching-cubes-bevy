@@ -5,6 +5,16 @@ use bevy::render::mesh::Mesh;
 use bevy::render::mesh::VertexAttributeValues;
 use bevy::render::{pipeline::PrimitiveTopology, render_graph::base::MainPass};
 use bevy::{asset::Assets, ecs::Query, prelude::Handle};
+use bevy_mod_picking::InteractableMesh;
+use bevy_mod_picking::PickableMesh;
+use bevy_rapier3d::{
+    physics::{ColliderHandleComponent, RigidBodyHandleComponent},
+    rapier::{
+        dynamics::RigidBodySet,
+        geometry::{ColliderBuilder, ColliderSet},
+        math::{Point, Real},
+    },
+};
 use pipeline::setup_marching_mesh_pipeline;
 use pipeline::MarchMeshMaterial;
 use pipeline::ATTRIBUTE_POINT_DATA;
@@ -14,6 +24,7 @@ use crate::triangulation::{self, triangulation};
 
 pub mod pipeline;
 
+#[derive(Clone)]
 pub struct Chunk {
     pub data: Box<Vec<Vec<Vec<f32>>>>,
 }
@@ -47,19 +58,49 @@ pub struct MarchingChunkBundle {
 }
 
 fn regen_mesh(
+    commands: &mut Commands,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut collider_set: ResMut<ColliderSet>,
+    mut bodies: ResMut<RigidBodySet>,
     chunk_settings: Res<ChunkSettings>,
-    mesh_query: Query<(&Chunk, &Handle<Mesh>), Changed<Chunk>>,
+    mesh_query: Query<
+        (
+            &Chunk,
+            &Handle<Mesh>,
+            &ColliderHandleComponent,
+            &RigidBodyHandleComponent,
+            Entity,
+        ),
+        Changed<Chunk>,
+    >,
+    interactable_query: Query<(&PickableMesh, &InteractableMesh)>,
 ) {
-    for (chunk, mesh_handle) in mesh_query.iter() {
-        if meshes.get(mesh_handle).is_none() {
-            println!("Setting mesh");
-            meshes.set(mesh_handle, Mesh::new(PrimitiveTopology::TriangleList));
+    for (chunk, mesh_handle, collider_handle, rigid_body_handle, entity) in mesh_query.iter() {
+        let mesh = meshes.get_mut(mesh_handle).unwrap();
+        let (v_pos, normals, p_data, indices) = generate_mesh(&chunk_settings, &chunk);
+        let mut collider_verts: Vec<Point<Real>> = Vec::new();
+        let mut collider_indicies: Vec<[u32; 3]> = Vec::new();
+
+        for pos in v_pos.iter() {
+            collider_verts.push(Point::new(pos[0], pos[1], pos[2]));
         }
 
-        let mesh = meshes.get_mut(mesh_handle).unwrap();
+        for i in (0..indices.len()).step_by(3) {
+            collider_indicies.push([indices[i], indices[i + 1], indices[i + 2]]);
+        }
 
-        let (v_pos, normals, p_data, indices) = generate_mesh(&chunk_settings, &chunk);
+        collider_set.remove(collider_handle.handle(), &mut bodies, true);
+        let new_handle = collider_set.insert(
+            ColliderBuilder::trimesh(
+                collider_verts, 
+                collider_indicies
+            ).build(),
+            rigid_body_handle.handle(),
+            &mut bodies,
+        );
+        commands.remove_one::<ColliderHandleComponent>(entity);
+        commands.set_current_entity(entity);
+        commands.with(ColliderHandleComponent::from(new_handle));
 
         mesh.set_attribute(
             Mesh::ATTRIBUTE_POSITION,
@@ -74,6 +115,19 @@ fn regen_mesh(
         mesh.set_attribute(ATTRIBUTE_POINT_DATA, VertexAttributeValues::Float(p_data));
 
         mesh.set_indices(Some(bevy::render::mesh::Indices::U32(indices)));
+
+        let interactable_query_result = interactable_query.get(entity);
+
+        match interactable_query_result {
+            Ok(_) => {}
+            Err(query_error) => match query_error {
+                bevy::ecs::QueryError::NoSuchEntity => {
+                    commands.insert_one(entity, PickableMesh::default());
+                    commands.insert_one(entity, InteractableMesh::default());
+                }
+                _ => {}
+            },
+        }
     }
 }
 
