@@ -1,4 +1,7 @@
-use bevy_rapier3d::{physics::RapierPhysicsPlugin, rapier::{dynamics::RigidBodyBuilder, geometry::ColliderBuilder}};
+use bevy_fly_camera::{FlyCamera, FlyCameraPlugin};
+use bevy_rapier3d::{physics::RapierPhysicsPlugin, rapier::{dynamics::RigidBodyBuilder, geometry::ColliderBuilder, math::Real}};
+use camera::third_person_camera::{FollowTarget, ThirdPerson3DCameraBundle, ThirdPersonCamera, ThirdPersonCameraPlugin};
+use settings::SettingsPlugin;
 use crate::chunk::pipeline::MarchMeshMaterial;
 use crate::chunk::pipeline::MARCHING_MESH_MAT;
 use crate::chunk::Chunk;
@@ -27,6 +30,8 @@ const thershold: f32 = 0.0f32;
 
 pub mod chunk;
 pub mod triangulation;
+pub mod camera;
+pub mod settings;
 
 struct ModifyLand{
     incrementing: bool,
@@ -56,6 +61,8 @@ fn main() {
         .add_plugin(DebugPickingPlugin)
         .add_plugin(MarchingCubesPlugin)
         .add_plugin(RapierPhysicsPlugin)
+        .add_plugin(SettingsPlugin)
+        .add_plugin(ThirdPersonCameraPlugin)
         .add_startup_system(setup.system())
         .add_startup_system(setup_march_mesh.system())
         .add_startup_system(setup_test_object.system())
@@ -64,7 +71,11 @@ fn main() {
 }
 
 /// set up a simple 3D scene
-fn setup(commands: &mut Commands) {
+fn setup(
+    commands: &mut Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
     commands
         // light
         .spawn(LightBundle {
@@ -72,11 +83,30 @@ fn setup(commands: &mut Commands) {
             ..Default::default()
         })
         // camera
-        .spawn(CameraRigBundle::default())
-        .with_children(|cb| {
-            cb.spawn(Camera3dBundle {
-                transform: Transform::from_translation(Vec3::new(-20.0, 20., 0.0))
-                    .looking_at(Vec3::zero(), Vec3::unit_y()),
+        // .spawn(CameraRigBundle::default())
+        // .with_children(|cb| {
+        //     cb.spawn(Camera3dBundle {
+        //         transform: Transform::from_translation(Vec3::new(-20.0, 20., 0.0))
+        //             .looking_at(Vec3::zero(), Vec3::unit_y()),
+        //         ..Default::default()
+        //     })
+        //     .with(PickSource::default());
+        // });
+        .spawn(PbrBundle {
+            mesh: meshes.add(Mesh::from(shape::Icosphere{radius: 1.0, ..Default::default()})),
+            material: materials.add(Color::rgb(0.5, 0.4, 0.3).into()),
+            transform: Transform::from_translation(Vec3::new(10.0, 0.0, 10.0)),
+            ..Default::default()
+        })
+        .with(RigidBodyBuilder::new_dynamic().translation(10.0, 50.0, 10.0))
+        .with(ColliderBuilder::cylinder(1.0, 1.0))
+        .with(FollowTarget)
+        .with_children(|parent|{
+            parent.spawn(ThirdPerson3DCameraBundle {
+                third_person_camera: ThirdPersonCamera {
+                    distance: 40.0,
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .with(PickSource::default());
@@ -126,8 +156,8 @@ fn setup_march_mesh(
         objectColor: Vec3::new(0.88, 0.32, 0.39),
     });
 
-    for z in 0..1 {
-        for x in 0..1 {
+    for z in 0..10 {
+        for x in 0..10 {
             commands
                 .spawn(MarchingChunkBundle {
                     mesh: meshes.add(Mesh::new(PrimitiveTopology::TriangleList)),
@@ -135,11 +165,10 @@ fn setup_march_mesh(
                     render_pipelines: RenderPipelines::from_pipelines(vec![RenderPipeline::new(
                         pipeline_handle.clone_weak(),
                     )]),
-                    transform: Transform::from_translation(Vec3::new(((chunk_settings.width - 1) * x) as f32, 0.0, ((chunk_settings.length - 1) * z) as f32)),
                     ..Default::default()
                 })
                 .with(mesh_material_handle.clone_weak())
-                .with(RigidBodyBuilder::new_static())
+                .with(RigidBodyBuilder::new_static().translation(((chunk_settings.width - 1) * x) as Real, 0.0, ((chunk_settings.length - 1) * z) as Real))
                 .with(ColliderBuilder::cuboid(1.0, 1.0, 1.0));
         }
     }
@@ -155,7 +184,7 @@ fn setup_test_object(
         material: materials.add(Color::rgb(1.0, 0.0, 0.0).into()),
         ..Default::default()
     })
-    .with(RigidBodyBuilder::new_dynamic().translation(10.0, 20.0, 10.0).gravity_scale(0.5))
+    .with(RigidBodyBuilder::new_dynamic().translation(10.0, 20.0, 10.0).gravity_scale(0.5).linvel(0.0, 0.0, 10.0))
     .with(ColliderBuilder::cylinder(1.0, 1.0));
 }
 
@@ -168,7 +197,7 @@ fn inside_sphere(sphere_pos: Vec3, radius: f32, point: Vec3) -> bool {
 
 fn select_terrain(
     pick_state: Res<PickState>,
-    mut mod_land: ResMut<ModifyLand>,
+    chunk_setting: Res<ChunkSettings>,
     mut corner_query: Query<(&InteractableMesh, &mut Chunk, &Transform, Entity)>,
 ) {
     for (interactable, mut chunk, transform, entity) in &mut corner_query.iter_mut() {
@@ -180,61 +209,37 @@ fn select_terrain(
             .mouse_down_event(&Group::default(), MouseButton::Right)
             .unwrap();
 
-        match increment_event {
-            bevy_mod_picking::MouseDownEvents::None => {}
-            bevy_mod_picking::MouseDownEvents::MouseJustPressed => {
-                mod_land.incrementing = true;
-                mod_land.change_value += 0.1;
-            }
-            bevy_mod_picking::MouseDownEvents::MouseJustReleased => {
-                mod_land.incrementing = false;
-                mod_land.change_value -= 0.1;
-            }
-        }
-
-        match decrement_event {
-            bevy_mod_picking::MouseDownEvents::None => {}
-            bevy_mod_picking::MouseDownEvents::MouseJustPressed => {
-                mod_land.decrementing = true;
-                mod_land.change_value -= 0.1;
-            }
-            bevy_mod_picking::MouseDownEvents::MouseJustReleased => {
-                mod_land.decrementing = false;
-                mod_land.change_value += 0.1;
-            }
-        }
-
-        if !mod_land.incrementing && !mod_land.decrementing {
+        if increment_event.is_none() && decrement_event.is_none() {
             continue;
         }
 
-        match pick_state.top(Group::default()) {
-            Some(top_state) => {
-                let(_, intersection) = top_state;
+        let (_, intersection) = pick_state.top(Group::default()).unwrap();
+        let sphere_center = intersection.position();
+        let chunk_position = transform.translation;
 
-                let sphere_center = intersection.position();
-                let chunk_position = transform.translation;
+        // Gen a sphere and capture chunk data in that sphere
+        for y in 0..chunk_setting.height {
+            for x in 0..chunk_setting.width {
+                for z in 0..chunk_setting.length {
+                    if inside_sphere(
+                        *sphere_center,
+                        3f32,
+                        Vec3::new(
+                            chunk_position.x + x as f32,
+                            chunk_position.y + y as f32,
+                            chunk_position.z + z as f32,
+                        ),
+                    ) {
+                        if !increment_event.is_none() {
+                            chunk.data[x][y][z] += 0.1;
+                        }
 
-                // Gen a sphere and capture chunk data in that sphere
-                for y in 0..HEIGHT {
-                    for x in 0..WIDTH {
-                        for z in 0..LENGTH {
-                            if inside_sphere(
-                                *sphere_center,
-                                1.0f32,
-                                Vec3::new(
-                                    chunk_position.x + x as f32,
-                                    chunk_position.y + y as f32,
-                                    chunk_position.z + z as f32,
-                                ),
-                            ) {
-                                chunk.data[x][y][z] += mod_land.change_value;
-                            }
+                        if !decrement_event.is_none() {
+                            chunk.data[x][y][z] -= 0.1;
                         }
                     }
                 }
             }
-            None => {}
         }
     }
 }

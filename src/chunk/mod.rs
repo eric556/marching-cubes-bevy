@@ -245,9 +245,9 @@ pub struct MarchingCubesPlugin;
 impl Plugin for MarchingCubesPlugin {
     fn build(&self, app: &mut bevy::prelude::AppBuilder) {
         app.add_resource(ChunkSettings {
-            length: 60,
-            width: 60,
-            height: 60,
+            length: 16,
+            width: 16,
+            height: 40,
             threshold: 0.0,
             ..Default::default()
         })
